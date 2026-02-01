@@ -189,7 +189,7 @@ Key goals:
 - **Study Area**: Kathmandu Valley boundary shapefile  
 
 ### Directory Structure
-
+```
 sciprogassignment2/
 ├── ndvi_lst_landuse_analysis.py
 ├── landuse_lst_zonal_stats.py
@@ -199,7 +199,7 @@ sciprogassignment2/
 │ ├── kathmandu_landuse_osm.gpkg
 │ └── ktm_bhktpr_ltpr_shapefile.gpkg
 └── README.md
-
+```
 
 ### Usage
 
