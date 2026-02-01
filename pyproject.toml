@@ -4,24 +4,9 @@ version = "0.1.0"
 description = "dependencies required for assignment 2"
 authors = ["Abhishek Adhikari", "Meghraj Singh"]
 readme = "README.md"
-requires-python = ">=3.13, <3.15"
-dependencies = [
-    "numpy (>=2.4.1,<3.0.0)",
-    "pandas (>=3.0.0,<4.0.0)",
-    "matplotlib (>=3.10.8,<4.0.0)",
-    "geopandas (>=1.1.2,<2.0.0)",
-    "osmnx (>=2.0.7,<3.0.0)",
-    "rasterio (>=1.5.0,<2.0.0)",
-    "rasterstats (>=0.20.0,<0.21.0)",
-    "rioxarray (>=0.21.0,<0.22.0)",
-    "scipy (>=1.17.0,<2.0.0)",
-    "seaborn (>=0.13.2,<0.14.0)",
-    "torch (>=2.10.0,<3.0.0)"
-]
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.15"
-
 numpy = ">=2.4.1,<3.0.0"
 pandas = ">=3.0.0,<4.0.0"
 matplotlib = ">=3.10.8,<4.0.0"
@@ -29,7 +14,10 @@ geopandas = ">=1.1.2,<2.0.0"
 osmnx = ">=2.0.7,<3.0.0"
 rasterio = ">=1.5.0,<2.0.0"
 rasterstats = ">=0.20.0,<0.21.0"
-torch = "^2.10.0"
+rioxarray = ">=0.21.0,<0.22.0"
+scipy = ">=1.17.0,<2.0.0"
+seaborn = ">=0.13.2,<0.14.0"
+torch = ">=2.10.0,<3.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
