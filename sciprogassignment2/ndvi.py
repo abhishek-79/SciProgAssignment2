@@ -1,203 +1,191 @@
 """
-NDVI-LST Temporal Analysis for Kathmandu Valley
-Analyzes vegetation and temperature changes across 2016, 2020, and 2025.
+NDVI–LST Temporal Analysis for Kathmandu Valley
+CPU vs GPU Benchmark
 """
 
-import rioxarray as rxr
-import xarray as xr
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
 import numpy as np
+import xarray as xr
+import rioxarray as rxr
+import torch
 import matplotlib.pyplot as plt
 import geopandas as gpd
-from pathlib import Path
-import os
 
-os.environ['PROJ_LIB'] = ''
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Running on:", DEVICE)
+
+@contextmanager
+def timer(name):
+    """Time a code block."""
+    start = time.perf_counter()
+    yield
+    if DEVICE.type == "cuda":
+        torch.cuda.synchronize()
+    end = time.perf_counter()
+    print(f"{name:<25} {end - start:.4f} s")
 
 
-def load_lst_for_year(modis_files, mask_value=0):
-    """Load and average multiple MODIS LST files, converting to Celsius."""
-    lst_arrays = []
+def load_lst_for_year_cpu(modis_files, mask_value=0):
+    """CPU: load and average LST files."""
+    arrays = []
     for f in modis_files:
         da = rxr.open_rasterio(f, masked=False).squeeze()
         da = da.where(da != mask_value) - 273.15
-        lst_arrays.append(da)
-    return xr.concat(lst_arrays, dim='time').mean(dim='time')
+        arrays.append(da)
+    return xr.concat(arrays, dim="time").mean(dim="time"), da
 
 
-def compute_ndvi(red_file, nir_file):
-    """Compute NDVI from Sentinel-2 red and NIR bands."""
+def compute_ndvi_cpu(red_file, nir_file):
+    """CPU: compute NDVI from red/NIR bands."""
     red = rxr.open_rasterio(red_file, masked=True).squeeze()
     nir = rxr.open_rasterio(nir_file, masked=True).squeeze()
-    
-    ndvi_vals = (nir.values - red.values) / (nir.values + red.values + 1e-10)
-    ndvi_vals = np.where((ndvi_vals < -1) | (ndvi_vals > 1), np.nan, ndvi_vals)
-    
-    ndvi = xr.DataArray(ndvi_vals, coords=nir.coords, dims=nir.dims,
-                       attrs={'long_name': 'NDVI', 'units': ''})
-    ndvi = ndvi.rio.write_crs(nir.rio.crs)
-    ndvi = ndvi.rio.write_transform(nir.rio.transform())
+    vals = (nir.values - red.values) / (nir.values + red.values + 1e-10)
+    vals = np.where((vals < -1) | (vals > 1), np.nan, vals)
+    da = xr.DataArray(vals, coords=nir.coords, dims=nir.dims)
+    da = da.rio.write_crs(nir.rio.crs).rio.write_transform(nir.rio.transform())
+    return da
+
+
+def to_tensor(arr):
+    """Convert NumPy array to torch tensor on DEVICE."""
+    return torch.as_tensor(arr, dtype=torch.float32, device=DEVICE)
+
+
+def load_lst_for_year_gpu(modis_files, mask_value=0):
+    """GPU: load and average LST as tensors (per-year only)."""
+    tensors = []
+    for f in modis_files:
+        da = rxr.open_rasterio(f, masked=False).squeeze()
+        t = to_tensor(da.values)
+        t = torch.where(t == mask_value, torch.nan, t) - 273.15
+        tensors.append(t)
+    mean_lst = torch.nanmean(torch.stack(tensors), dim=0)
+    return mean_lst
+
+
+def compute_ndvi_gpu(red_file, nir_file):
+    """GPU: compute NDVI as tensor (per-year only)."""
+    red = to_tensor(rxr.open_rasterio(red_file, masked=True).squeeze().values)
+    nir = to_tensor(rxr.open_rasterio(nir_file, masked=True).squeeze().values)
+    ndvi = (nir - red) / (nir + red + 1e-10)
+    ndvi = torch.where((ndvi < -1) | (ndvi > 1), torch.nan, ndvi)
     return ndvi
 
 
-def load_year_data(data_dir, year, lst_pattern, ndvi_red_file, ndvi_nir_file):
-    """Load LST and NDVI data for a single year."""
-    lst = load_lst_for_year(lst_pattern)
-    ndvi = compute_ndvi(ndvi_red_file, ndvi_nir_file)
-    return lst, ndvi
-
-
 def clip_to_boundary(data_list, boundary):
-    """Clip multiple rasters to boundary shapefile."""
+    """Clip rasters to shapefile."""
     clipped = []
-    for data in data_list:
-        clipped_data = data.rio.clip(
-            boundary.geometry.to_crs(data.rio.crs),
-            data.rio.crs, drop=True, all_touched=True
+    for da in data_list:
+        clipped.append(
+            da.rio.clip(boundary.geometry.to_crs(da.rio.crs),
+                        da.rio.crs, drop=True, all_touched=True)
         )
-        clipped.append(clipped_data)
     return clipped
 
 
 def build_datacubes(lst_list, ndvi_list, years, reference_grid):
-    """Build temporal datacubes from multiple years, matched to reference grid."""
-    lst_matched = [lst_list[0]] + [
-        lst.rio.reproject_match(reference_grid) for lst in lst_list[1:]
-    ]
-    ndvi_matched = [
-        ndvi.rio.reproject_match(reference_grid) for ndvi in ndvi_list
-    ]
-    
-    lst_cube = xr.concat(lst_matched, dim=xr.DataArray(years, dims='year', name='year'))
-    ndvi_cube = xr.concat(ndvi_matched, dim=xr.DataArray(years, dims='year', name='year'))
-    
+    """CPU: build temporal cubes."""
+    lst_matched = [lst_list[0]] + [lst.rio.reproject_match(reference_grid) for lst in lst_list[1:]]
+    ndvi_matched = [ndvi.rio.reproject_match(reference_grid) for ndvi in ndvi_list]
+    lst_cube = xr.concat(lst_matched, dim=xr.DataArray(years, dims="year", name="year"))
+    ndvi_cube = xr.concat(ndvi_matched, dim=xr.DataArray(years, dims="year", name="year"))
     return lst_cube, ndvi_cube
 
 
 def calculate_changes(cube, years):
-    """Calculate temporal changes between years."""
+    """CPU: compute year-to-year changes."""
     changes = {}
-    for i in range(len(years) - 1):
-        key = f"{years[i]}_{years[i+1]}"
-        changes[key] = cube.sel(year=years[i+1]) - cube.sel(year=years[i])
-    changes['total'] = cube.sel(year=years[-1]) - cube.sel(year=years[0])
+    for i in range(len(years)-1):
+        changes[f"{years[i]}_{years[i+1]}"] = cube.sel(year=years[i+1]) - cube.sel(year=years[i])
+    changes["total"] = cube.sel(year=years[-1]) - cube.sel(year=years[0])
     return changes
 
 
 def plot_spatial_comparison(lst_clipped, ndvi_clipped, lst_changes, years):
-    """Create 3x3 spatial comparison plot."""
+    """Plot NDVI, LST, and LST changes."""
     fig, axes = plt.subplots(3, 3, figsize=(18, 16))
-    
     lst_vmin = min(float(lst.min()) for lst in lst_clipped)
     lst_vmax = max(float(lst.max()) for lst in lst_clipped)
-    
-    # NDVI row
+
     for i, (ndvi, year) in enumerate(zip(ndvi_clipped, years)):
-        ndvi.plot(ax=axes[0, i], cmap='YlGn', vmin=0, vmax=1,
-                 cbar_kwargs={'label': 'NDVI'})
-        axes[0, i].set_title(f'NDVI {year}', fontsize=12, fontweight='bold')
-        axes[0, i].set_aspect('equal')
-    
-    # LST row
+        ndvi.plot(ax=axes[0, i], cmap="YlGn", vmin=0, vmax=1, cbar_kwargs={"label": "NDVI"})
+        axes[0, i].set_title(f"NDVI {year}")
     for i, (lst, year) in enumerate(zip(lst_clipped, years)):
-        lst.plot(ax=axes[1, i], cmap='RdYlBu_r', vmin=lst_vmin, vmax=lst_vmax,
-                cbar_kwargs={'label': 'Temperature (°C)'})
-        axes[1, i].set_title(f'LST {year}', fontsize=12, fontweight='bold')
-        axes[1, i].set_aspect('equal')
-    
-    # Change row
-    change_keys = [f"{years[0]}_{years[1]}", f"{years[1]}_{years[2]}", 'total']
-    change_titles = [f'{years[0]}→{years[1]}', f'{years[1]}→{years[2]}', 
-                    f'{years[0]}→{years[2]} (Total)']
-    
-    for i, (key, title) in enumerate(zip(change_keys, change_titles)):
-        lst_changes[key].plot(ax=axes[2, i], cmap='RdBu_r', center=0,
-                            cbar_kwargs={'label': 'LST Change (°C)'})
-        axes[2, i].set_title(f'LST Change {title}', fontsize=12, fontweight='bold')
-        axes[2, i].set_aspect('equal')
-    
-    plt.suptitle('NDVI-LST Temporal Analysis: Kathmandu Valley (2016-2025)',
-                fontsize=18, fontweight='bold', y=0.995)
+        lst.plot(ax=axes[1, i], cmap="RdYlBu_r", vmin=lst_vmin, vmax=lst_vmax, cbar_kwargs={"label": "LST (°C)"})
+        axes[1, i].set_title(f"LST {year}")
+    keys = [f"{years[0]}_{years[1]}", f"{years[1]}_{years[2]}", "total"]
+    titles = [f"{years[0]}→{years[1]}", f"{years[1]}→{years[2]}", f"{years[0]}→{years[2]}"]
+    for i, (k, t) in enumerate(zip(keys, titles)):
+        lst_changes[k].plot(ax=axes[2, i], cmap="RdBu_r", center=0, cbar_kwargs={"label": "LST Change"})
+        axes[2, i].set_title(f"LST Change {t}")
+
     plt.tight_layout()
     return fig
 
 
 def plot_time_series(lst_cube, ndvi_cube, years):
-    """Create time series plot of mean LST and NDVI."""
+    """Plot mean LST and NDVI over years."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    
     lst_means = [float(lst_cube.sel(year=y).mean(skipna=True)) for y in years]
     ndvi_means = [float(ndvi_cube.sel(year=y).mean(skipna=True)) for y in years]
-    
-    ax1.plot(years, lst_means, 'o-', linewidth=2, markersize=8, color='red')
-    ax1.set_ylabel('Mean LST (°C)', fontsize=12, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_title('Temporal Trends in Kathmandu Valley', fontsize=14, fontweight='bold')
-    
-    ax2.plot(years, ndvi_means, 'o-', linewidth=2, markersize=8, color='green')
-    ax2.set_ylabel('Mean NDVI', fontsize=12, fontweight='bold')
-    ax2.set_xlabel('Year', fontsize=12, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xticks(years)
-    
+    ax1.plot(years, lst_means, "o-", color="red")
+    ax2.plot(years, ndvi_means, "o-", color="green")
+    ax1.set_ylabel("Mean LST (°C)"); ax2.set_ylabel("Mean NDVI"); ax2.set_xlabel("Year")
     plt.tight_layout()
     return fig
 
 
 def run_analysis(data_dir, boundary_file):
-    """Main analysis workflow."""
+    """Run workflow: CPU vs GPU per-year timing; CPU datacubes for plotting."""
     data_dir = Path(data_dir)
     years = [2016, 2020, 2025]
-    
-    # Load boundary
-    kathmandu = gpd.read_file(boundary_file)
-    
-    # Load data for all years
-    lst_2016, ndvi_2016 = load_year_data(
-        data_dir, 2016,
-        [data_dir / f"May2016/lst_may_2016_{i}.tif" for i in range(1, 5)],
-        data_dir / "May2016/sentinel_2_band_04_may_2016.tif",
-        data_dir / "May2016/sentinel_2_band_08_may_2016.tif"
-    )
-    
-    lst_2020, ndvi_2020 = load_year_data(
-        data_dir, 2020,
-        [data_dir / f"May2020/lst_may_2020_{i}.tif" for i in range(1, 5)],
-        data_dir / "May2020/sentinel_2_band_04_may_2020.tif",
-        data_dir / "May2020/sentinel_2_band_08_may_2020.tif"
-    )
-    
-    lst_2025, ndvi_2025 = load_year_data(
-        data_dir, 2025,
-        [data_dir / f"May2025/lst_may_2025_{i}.tif" for i in range(1, 5)],
-        data_dir / "May2025/sentinel_2_band_04_may_2025.tif",
-        data_dir / "May2025/sentinel_2_band_08_may_2025.tif"
-    )
-    
-    # Clip to boundary
-    lst_clipped = clip_to_boundary([lst_2016, lst_2020, lst_2025], kathmandu)
-    ndvi_clipped = clip_to_boundary([ndvi_2016, ndvi_2020, ndvi_2025], kathmandu)
-    
-    # Build datacubes
-    lst_cube, ndvi_cube = build_datacubes(
-        lst_clipped, ndvi_clipped, years, lst_clipped[0]
-    )
-    
-    # Calculate changes
-    lst_changes = calculate_changes(lst_cube, years)
-    
-    # Generate plots
-    fig_spatial = plot_spatial_comparison(lst_clipped, ndvi_clipped, lst_changes, years)
-    fig_timeseries = plot_time_series(lst_cube, ndvi_cube, years)
-    
+    boundary = gpd.read_file(boundary_file)
+
+    lst_cpu_all, ndvi_cpu_all = [], []
+    lst_gpu_all, ndvi_gpu_all = [], []
+
+    for year in years:
+        lst_files = [data_dir / f"May{year}/lst_may_{year}_{i}.tif" for i in range(1, 5)]
+        red_file = data_dir / f"May{year}/sentinel_2_band_04_may_{year}.tif"
+        nir_file = data_dir / f"May{year}/sentinel_2_band_08_may_{year}.tif"
+
+        with timer(f"CPU LST {year}"):
+            lst_cpu, ref = load_lst_for_year_cpu(lst_files)
+        with timer(f"CPU NDVI {year}"):
+            ndvi_cpu = compute_ndvi_cpu(red_file, nir_file)
+
+        with timer(f"GPU LST {year}"):
+            lst_gpu = load_lst_for_year_gpu(lst_files)
+        with timer(f"GPU NDVI {year}"):
+            ndvi_gpu = compute_ndvi_gpu(red_file, nir_file)
+
+        lst_cpu_all.append(lst_cpu); ndvi_cpu_all.append(ndvi_cpu)
+        lst_gpu_all.append(lst_gpu); ndvi_gpu_all.append(ndvi_gpu)
+
+    with timer("CPU Clipping"):
+        lst_cpu_clipped = clip_to_boundary(lst_cpu_all, boundary)
+        ndvi_cpu_clipped = clip_to_boundary(ndvi_cpu_all, boundary)
+
+    with timer("CPU Datacubes"):
+        lst_cube, ndvi_cube = build_datacubes(lst_cpu_clipped, ndvi_cpu_clipped, years, lst_cpu_clipped[0])
+
+    with timer("CPU LST Changes"):
+        lst_changes = calculate_changes(lst_cube, years)
+
+    with timer("Plot Spatial Comparison"):
+        plot_spatial_comparison(lst_cpu_clipped, ndvi_cpu_clipped, lst_changes, years)
+    with timer("Plot Time Series"):
+        plot_time_series(lst_cube, ndvi_cube, years)
+
     plt.show()
-    
     return lst_cube, ndvi_cube, lst_changes
 
 
 if __name__ == "__main__":
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent
-    data_dir = project_root / "data"
+    project_root = Path(__file__).parent
+    data_dir = project_root.parent / "data"
     boundary_file = data_dir / "ktm_bhktpr_ltpr_shapefile.gpkg"
-    
     run_analysis(data_dir, boundary_file)
