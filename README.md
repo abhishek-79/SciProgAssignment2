@@ -243,7 +243,109 @@ The code automatically detects GPU availability and falls back to CPU if CUDA is
 
 ## LST and Land Use Analysis
 
-[Content to be added by partner]
+## NDVI–LST–Landuse Analysis
+
+### Overview
+
+This module performs a multi-year analysis of NDVI (vegetation) and LST (Land Surface Temperature) in Kathmandu Valley, conditioned on land-use types. The analysis explores the relationships between vegetation, temperature, and urban land-use categories for the years 2020 and 2025.
+
+Key goals:  
+
+- Quantify how LST varies across land-use types  
+- Examine the correlation between NDVI and LST globally and per land-use class  
+- Attach mean NDVI and LST values to land-use polygons for spatial reporting  
+
+### Features
+
+- **Multi-year Analysis**: 2020 and 2025  
+- **Global NDVI–LST Correlation**: Regression slope, R², and RMSE  
+- **Land-Use Conditioned Analysis**: Per-class NDVI–LST correlations  
+- **Rasterized Land-Use Layer**: Vector-to-raster conversion for pixel-level analysis  
+- **GeoPackage Output**: Enriched land-use polygons for mapping  
+- **CSV Summary**: Tabular zonal statistics by land-use class  
+
+### Data Sources
+
+- **LST Data**: MODIS 8-day LST composites (May 2020, May 2025)  
+- **NDVI Data**: Sentinel-2 MSI bands (Red: Band 4, NIR: Band 8)  
+- **Land-Use Data**: Kathmandu Valley land-use polygons (GeoPackage)  
+- **Study Area**: Kathmandu Valley boundary shapefile  
+
+### Directory Structure
+```
+sciprogassignment2/
+├── ndvi_lst_landuse_analysis.py
+├── landuse_lst_zonal_stats.py
+├── data/
+│ ├── May2020/
+│ ├── May2025/
+│ ├── kathmandu_landuse_osm.gpkg
+│ └── ktm_bhktpr_ltpr_shapefile.gpkg
+└── README.md
+```
+
+### Usage
+
+#### Python API
+
+```python
+from ndvi_lst_landuse_analysis import run_ndvi_lst_landuse_analysis
+
+data_dir = "data"
+results_2020, results_2025 = run_ndvi_lst_landuse_analysis(data_dir)
+```
+
+#### Command Line
+```
+python main.py
+```
+Toggle execution using RUN_NDVI_LST_LANDUSE = TRUE.
+
+### Outputs
+
+1. **CSV Summary** (`data/output/landuse_ndvi_lst_stats_YYYY.csv`)  
+   - Regression R², slope, and pixel count per land-use class  
+
+2. **GeoPackage** (`data/output/landuse_ndvi_lst_stats.gpkg`)  
+   - Land-use polygons enriched with mean NDVI and LST values  
+
+3. **Global Statistics**  
+   - Regression slope, intercept, R², RMSE, pixel count across the study area  
+
+### Requirements
+
+rioxarray
+xarray
+numpy
+geopandas
+pandas
+scipy
+rasterio
+rasterstats
+
+Install via Poetry:
+```
+poetry install
+```
+
+Or via pip:
+```
+pip install rioxarray xarray numpy geopandas pandas scipy rasterio rasterstats
+```
+
+### Technical Notes
+
+- CRS Handling: All data reprojected to match NDVI raster CRS  
+- NDVI Range Check: Values outside [-1, 1] masked  
+- LST Conversion: MODIS LST converted from Kelvin to Celsius  
+- Raster-Vector Alignment: Land-use polygons rasterized to NDVI pixel grid  
+
+### Known Issues
+
+- Large raster files may increase memory usage  
+- Sparse land-use classes may yield insufficient pixels for regression
+
+---
 
 ## Installation
 
