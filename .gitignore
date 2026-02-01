@@ -208,6 +208,8 @@ __marimo__/
 
 # Ignore May 2025 data outputs
 data/May2025/
+data/May2020/
+data/May2025/
 
 # Ignore cache filse
 cache/
