@@ -1,0 +1,9 @@
+year,land_use_class,r_squared,slope,n_pixels
+2020,Agricultural zone,,0.0,209371
+2020,Residential zone,,0.0,157182
+2020,Commercial zone,,0.0,3601
+2020,Industrial zone,,0.0,5838
+2020,Forest zone,,0.0,1371879
+2020,Public use zone,,0.0,47090
+2020,Cultural/archaeological,,,0
+2020,Mines and minerals,,,0

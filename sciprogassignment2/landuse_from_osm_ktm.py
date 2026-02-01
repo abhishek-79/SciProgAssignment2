@@ -3,27 +3,49 @@
 # Study Area: Kathmandu Valley, Nepal
 # ============================================================
 
+"""
+This script derives land-use zones for the Kathmandu Valley, Nepal,
+using OpenStreetMap (OSM) data. The workflow includes:
+
+1. Loading the study area boundary.
+2. Downloading OSM features relevant to land use.
+3. Cleaning and filtering OSM data to retain only polygons.
+4. Classifying land-use types based on OSM tags.
+5. Reprojecting to a projected CRS suitable for area calculation.
+6. Dissolving polygons by land-use class.
+7. Clipping the final land-use zones to the study area boundary.
+8. Saving the results as a GeoPackage file.
+
+Dependencies:
+    - geopandas
+    - osmnx
+"""
+
 import geopandas as gpd
 import osmnx as ox
 
-# ------------------------------------------------------------
+# ============================================================
 # 1. LOAD KATHMANDU VALLEY BOUNDARY
-# ------------------------------------------------------------
+# ============================================================
 
+# File path to the Kathmandu Valley shapefile
 boundary_fp = "data/ktm_bhktpr_ltpr_shapefile.gpkg"
 
+# Load boundary
 boundary = gpd.read_file(boundary_fp)
 
-# OSM requires WGS84 (EPSG:4326)
+# Ensure the boundary is in WGS84 (EPSG:4326) for OSM compatibility
 boundary = boundary.to_crs(epsg=4326)
 
+# Extract geometry of the study area
 study_area = boundary.geometry.iloc[0]
 
 
-# ------------------------------------------------------------
+# ============================================================
 # 2. DOWNLOAD OSM LAND-USE RELATED FEATURES
-# ------------------------------------------------------------
+# ============================================================
 
+# Define OSM tags to retrieve
 tags = {
     "landuse": True,
     "building": True,
@@ -35,26 +57,36 @@ tags = {
     "man_made": True
 }
 
-osm = ox.features_from_polygon(
-    study_area,
-    tags
-)
+# Download features from OSM within the study area polygon
+osm = ox.features_from_polygon(study_area, tags)
 
 print("OSM features downloaded:", len(osm))
 
-# ------------------------------------------------------------
-# 3. CLEAN OSM DATA (KEEP POLYGONS ONLY)
-# ------------------------------------------------------------
 
+# ============================================================
+# 3. CLEAN OSM DATA (KEEP POLYGONS ONLY)
+# ============================================================
+
+# Retain only polygonal features for area-based land-use analysis
 osm = osm[osm.geometry.type.isin(["Polygon", "MultiPolygon"])]
 
 print("Polygon features retained:", len(osm))
 
-# ------------------------------------------------------------
+
+# ============================================================
 # 4. LAND-USE CLASSIFICATION FUNCTION
-# ------------------------------------------------------------
+# ============================================================
 
 def classify_landuse(row):
+    """
+    Classifies a single OSM feature into a land-use zone based on tags.
+
+    Parameters:
+        row (pd.Series): A row from the OSM GeoDataFrame.
+
+    Returns:
+        str: Land-use classification.
+    """
 
     # Agricultural zone
     if row.get("landuse") in ["farmland", "orchard", "vineyard", "meadow"]:
@@ -83,10 +115,7 @@ def classify_landuse(row):
     # Public use zone
     if row.get("leisure") in ["park", "playground"]:
         return "Public use zone"
-    if row.get("amenity") in [
-        "school", "hospital", "university",
-        "government", "parking"
-    ]:
+    if row.get("amenity") in ["school", "hospital", "university", "government", "parking"]:
         return "Public use zone"
 
     # Cultural and archaeological importance
@@ -97,54 +126,62 @@ def classify_landuse(row):
     if row.get("amenity") == "place_of_worship":
         return "Area of cultural and archaeological importance"
 
-    # Other
+    # Other categories (default)
     return "Other categories"
 
-# Apply classification
+# Apply land-use classification
 osm["land_use_class"] = osm.apply(classify_landuse, axis=1)
 
 print("Land-use classification completed.")
 
-# ------------------------------------------------------------
-# 5. REPROJECT TO PROJECTED CRS (FOR AREA / ZONAL ANALYSIS)
-# ------------------------------------------------------------
 
-# Use UTM zone for Kathmandu (EPSG:32645)
+# ============================================================
+# 5. REPROJECT TO PROJECTED CRS (FOR AREA / ZONAL ANALYSIS)
+# ============================================================
+
+# Use UTM zone for Kathmandu (EPSG:32645) for accurate area calculations
 osm = osm.to_crs(epsg=32645)
 boundary = boundary.to_crs(epsg=32645)
 
-# ------------------------------------------------------------
+
+# ============================================================
 # 6. DISSOLVE BY LAND-USE CLASS
-# ------------------------------------------------------------
+# ============================================================
 
-landuse_zones = osm.dissolve(by="land_use_class")
+# Aggregate polygons by land-use class
+landuse_zones = osm.dissolve(by="land_use_class").reset_index()
 
-# Keep only safe columns
-landuse_zones = landuse_zones.reset_index()
+# Keep only relevant columns
 landuse_zones = landuse_zones[["land_use_class", "geometry"]]
 
-# Calculate area (useful for reporting)
+# Calculate area in square meters and square kilometers
 landuse_zones["area_m2"] = landuse_zones.area
 landuse_zones["area_km2"] = landuse_zones.area / 1e6
 
 print("Dissolved land-use zones created:")
 print(landuse_zones.index.tolist())
 
-# ------------------------------------------------------------
-# 7. CLIP TO KATHMANDU BOUNDARY (SAFETY STEP)
-# ------------------------------------------------------------
 
+# ============================================================
+# 7. CLIP TO KATHMANDU BOUNDARY (SAFETY STEP)
+# ============================================================
+
+# Ensure all zones are clipped to the official study area
 landuse_zones = gpd.clip(landuse_zones, boundary)
 
-# ------------------------------------------------------------
+
+# ============================================================
 # 8. SAVE OUTPUT
-# ------------------------------------------------------------
+# ============================================================
 
 output_fp = "data/kathmandu_landuse_osm.gpkg"
+
+# Save as GeoPackage
 landuse_zones.to_file(output_fp, driver="GPKG")
 
 print("Land-use shapefile saved to:")
 print(output_fp)
+
 
 # ============================================================
 # END OF SCRIPT
